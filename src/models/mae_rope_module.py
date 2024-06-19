@@ -161,7 +161,9 @@ class MAEModuleRoPE(LightningModule):
             B, N, D = flattened_batch.shape
 
             # Apply the mask
-            masked_flattened_batch = flattened_batch.masked_fill_(mask.unsqueeze(-1), 0)
+            masked_flattened_batch = flattened_batch.masked_fill_(
+                (~mask).unsqueeze(-1), 0
+            )
             # print(f"[plot_spgs] masked_flattened_batch.shape: {flattened_batch.shape}")
 
             masked_batch = self.net.unpatchify(masked_flattened_batch, B, H, W)

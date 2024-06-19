@@ -78,19 +78,17 @@ def filter_index_simple(
     Filter the json `data_dir` index based on the specified conditions.
     """
     filtered_index = []
-    index_lens = [0] * len(index_paths)
-    print("Filtering data dir", file=sys.stderr)
+    index_lens = {}
+    print("[filter_index_simple] Filtering data dir", file=sys.stderr)
 
     # iterate over each data_dir (paths to json indices of the data),
     # i.e. we have one index for .edf and one for .pkl data
     nr_files = 0
-    for index_nr, index_path in enumerate(index_paths):
+    for index_path in index_paths:
 
         with open(index_path, "r") as file:
             index = json.load(file)
             nr_files += len(index)
-
-        index_size = 0
 
         for i, index_element in tqdm(
             enumerate(index), desc="Filtering index", position=0, leave=True
@@ -106,12 +104,21 @@ def filter_index_simple(
                 if index_element["path"].endswith(".edf"):
                     index_element["path"] = path_prefix + index_element["path"]
                 filtered_index.append(index_element)
-                index_lens[index_nr] += 1
+                if index_path not in index_lens:
+                    index_lens[index_path] = 0
+                else:
+                    index_lens[index_path] += 1
 
-    print(nr_files, "files found in total", file=sys.stderr)
-    print(index_lens, "files selected per index", file=sys.stderr)
-    print(len(filtered_index), "files selected in total", file=sys.stderr)
-    return filtered_index, index_lens
+    print("[filter_index_simple] files found in total:", nr_files, file=sys.stderr)
+    print(
+        "[filter_index_simple] files selected per index:", index_lens, file=sys.stderr
+    )
+    print(
+        "[filter_index_simple] files selected in total:",
+        len(filtered_index),
+        file=sys.stderr,
+    )
+    return filtered_index
 
 
 def create_raw(
@@ -218,7 +225,7 @@ def load_from_index(index_chunk, min_duration, max_duration):
     print("Starting to save the trials locally", file=sys.stderr)
 
     for num_processed_elements, index_element in enumerate(
-        tqdm(index_chunk, desc="Filtering index", position=0, leave=True)
+        tqdm(index_chunk, desc="Loading data", position=0, leave=True)
     ):
 
         sr = index_element["sr"]
@@ -251,9 +258,9 @@ def load_from_index(index_chunk, min_duration, max_duration):
             dur = len(channel_signal) / index_element["sr"]
 
             if dur > split_duration:
-                print(
-                    f"Chopping signal of length {dur} seconds into chunks of max {split_duration} seconds."
-                )
+                # print(
+                #     f"Chopping signal of length {dur} seconds into chunks of max {split_duration} seconds."
+                # )
 
                 # Calculate the number of samples in max_dur
                 max_samples = int(split_duration * sr)
@@ -266,7 +273,7 @@ def load_from_index(index_chunk, min_duration, max_duration):
 
                 # Calculate the duration of each chunk in seconds
                 durs = [len(chunk) / sr for chunk in signal_chunks]
-                print(durs)
+                # print(durs)
             else:
                 signal_chunks = [channel_signal]
                 durs = [dur]
@@ -293,7 +300,9 @@ def load_from_index(index_chunk, min_duration, max_duration):
     # == stored all index_elements for this index_chunk ==
 
     # print(f"Saved {num_trials} trials on process {thread_id}", file=sys.stderr)
-    print(f"Saved {num_trials} trials on process {0}", file=sys.stderr)
+    print(
+        f"[load_from_index] Loaded {num_trials} trials on process {0}", file=sys.stderr
+    )
 
     return trial_index
 
@@ -305,7 +314,7 @@ class LocalLoader:
         max_duration=1_000_000,
         split_duration=3_600,
         patch_size=16,
-        max_nr_patches=7_500,
+        max_nr_patches=8_500,
         win_shifts=[0.25, 0.5, 1, 2, 4, 8],
         win_shift_factor=0.25,
         num_threads=1,

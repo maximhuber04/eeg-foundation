@@ -97,13 +97,14 @@ def init_t_xy(end_x: int, end_y: int):
 
 
 def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
-    # print("reshape_for_broadcast:", freqs_cis.shape, x.shape)
     ndim = x.ndim
     assert 0 <= 1 < ndim
     if freqs_cis.shape == (x.shape[-2], x.shape[-1]):
         shape = [d if i >= ndim - 2 else 1 for i, d in enumerate(x.shape)]
     elif freqs_cis.shape == (x.shape[-3], x.shape[-2], x.shape[-1]):
         shape = [d if i >= ndim - 3 else 1 for i, d in enumerate(x.shape)]
+    elif freqs_cis.shape == (x.shape[0], x.shape[-2], x.shape[-1]):  # custom case
+        shape = [x.shape[0], 1, x.shape[-2], x.shape[-1]]
 
     return freqs_cis.view(*shape)
 

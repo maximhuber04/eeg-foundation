@@ -206,13 +206,24 @@ class EncoderViTRoPE(nn.Module):
         meta_patches = x[:, :nr_meta_patches, :]
 
         # Encoder: randomly mask some patches (exluding metadata patches)
-        x, mask = random_masking_smart(x, mask_ratio, nr_meta_patches)
+        mask, ids_restore = random_masking_smart(
+            x=x, mask_ratio=mask_ratio, nr_meta_tokens=nr_meta_patches
+        )
+        x = x[mask].view(B, -1, D)
         # print("[forward_encoder] after random_masking_smart:", x.shape, "(B, N, D)")
 
         # Encoder: select correct rotation information for the attention layers
-        freqs_cis = select_freqs_cis(
-            self, self.encoder_freqs_cis, H, W, win_size, x.device
+        freqs_cis = (
+            select_freqs_cis(self, self.encoder_freqs_cis, H, W, win_size, x.device)
+            .unsqueeze(0)
+            .repeat(B, 1, 1)
         )
+        # print("[forward_encoder] freqs_cis.shape:", freqs_cis.shape, "(B, N, D)")
+        freqs_cis = freqs_cis[mask[:, nr_meta_patches:]].view(
+            B, -1, freqs_cis.shape[-1]
+        )
+        assert freqs_cis.shape[1] > 0, f"freqs_cis.shape[1] == {freqs_cis.shape[1]}"
+        # print("[forward_encoder] masked freqs_cis.shape:", freqs_cis.shape, "(B, N, D)")
         # print(
         #     "[forward_encoder] freqs_cis.shape:",
         #     freqs_cis.shape,
@@ -228,4 +239,4 @@ class EncoderViTRoPE(nn.Module):
         x = self.encoder_norm(x)
         # print("[forward_encoder] after rope norm:", x.shape, "(B, N, D)")
 
-        return x, meta_patches, mask, nr_meta_patches
+        return x, meta_patches, mask, nr_meta_patches, ids_restore

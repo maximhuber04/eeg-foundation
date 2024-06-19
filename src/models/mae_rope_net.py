@@ -244,7 +244,8 @@ class ModularMaskedAutoencoderViTRoPE(nn.Module):
         # print("[forward_loss] NaN in loss2:", torch.isnan(loss).any())
         # print("[forward_loss] loss.shape after mean(dim=-1):", loss.shape)
 
-        loss = loss[mask].view(B, -1)
+        # compute reconstruction loss only where we threw away patches!!
+        # loss = loss[~mask].view(B, -1)
         # print("[forward_loss] NaN in loss3:", torch.isnan(loss).any())
         # print("[forward_loss] loss.shape after mask:", loss.shape)
 
@@ -264,7 +265,7 @@ class ModularMaskedAutoencoderViTRoPE(nn.Module):
         B, C, H, W = x.shape
 
         # == Encoder pass of model ==
-        x_emb, meta_patches, mask, nr_meta_patches = self.encoder(
+        x_emb, meta_patches, mask, nr_meta_patches, ids_restore = self.encoder(
             x=x,
             means=means,
             stds=stds,
@@ -276,6 +277,7 @@ class ModularMaskedAutoencoderViTRoPE(nn.Module):
         # == Decoder pass of model ==
         x_pred = self.decoder(
             x=x_emb,
+            ids_restore=ids_restore,
             nr_meta_patches=nr_meta_patches,
             H=H,
             W=W,

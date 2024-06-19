@@ -111,6 +111,8 @@ class DecoderViTRoPE(nn.Module):
         self.decoder_num_heads = decoder_num_heads
         self.decoder_rope_theta = decoder_rope_theta
 
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, decoder_embed_dim))
+
         self.decoder_freqs_cis = compute_axial_cis(
             dim=self.decoder_embed_dim // self.decoder_num_heads,
             end_x=self.max_x_patches,
@@ -126,14 +128,22 @@ class DecoderViTRoPE(nn.Module):
 
     # == Forward pass ===================================================================================================================
 
-    def forward(self, x, nr_meta_patches, H, W, win_size):
+    def forward(self, x, ids_restore, nr_meta_patches, H, W, win_size):
 
         # Decoder: embed the encoder output
         x = self.decoder_embed(x)
-        # print("[forward_decoder] NaN in x:", torch.isnan(x).any())
         # print("[forward_decoder] after decoder_embed:", x.shape, "(B, N, D')")
+        B, N, D = x.shape
 
-        # Decoder: recompute freqs_cis each batch (for simplicity)
+        # in the decoder, we need to fill the masked tokens first
+        ids_restore = ids_restore.unsqueeze(-1).repeat(1, 1, D)
+        mask_tokens = self.mask_token.repeat(B, ids_restore.shape[1] - N, 1)
+        x = torch.cat([x, mask_tokens], dim=1)
+        # TODO: possible to make faster / more memory efficient?
+        x_reordered = torch.zeros_like(x)
+        x = x_reordered.scatter_(1, ids_restore, x)
+
+        # Decoder: reselect freqs_cis each batch (due to varying win_size and [H, W])
         freqs_cis = select_freqs_cis(
             self, self.decoder_freqs_cis, H, W, win_size, x.device
         )

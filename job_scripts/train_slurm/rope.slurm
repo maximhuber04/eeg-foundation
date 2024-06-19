@@ -6,11 +6,11 @@
 #SBATCH --open-mode=append
 #SBATCH --job-name=pretrain
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:3
-#SBATCH --ntasks-per-node=3
+#SBATCH --gres=gpu:2
+#SBATCH --ntasks-per-node=2
 #SBATCH --cpus-per-task=10
-#SBATCH --mem=200G
-#SBATCH --nodelist=tikgpu10
+#SBATCH --mem=350G
+#SBATCH --nodelist=tikgpu08
 
 # Create directories for job
 mkdir -p /itet-stor/maxihuber/net_scratch/runs/$SLURM_JOB_ID

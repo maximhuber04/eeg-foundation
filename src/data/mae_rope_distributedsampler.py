@@ -1,4 +1,5 @@
 import math
+import os
 import sys
 import time
 import numpy as np
@@ -24,6 +25,7 @@ class ByChannelDistributedSampler(DistributedSampler):
         rank=None,
         shuffle=True,
         seed=0,
+        keep_all=True,
     ):
         super().__init__(dataset=dataset, drop_last=drop_last)
 
@@ -67,6 +69,7 @@ class ByChannelDistributedSampler(DistributedSampler):
         self.shuffle = shuffle
         self.seed = seed
         self.epoch = 0
+        self.keep_all = keep_all
 
         start_time = time.time()
         self.generate_batches()
@@ -236,7 +239,11 @@ class ByChannelDistributedSampler(DistributedSampler):
                     self.batch_indices.append(current_batch)
 
         self.total_size = len(self.batch_indices)
-        self.num_samples = math.ceil(self.total_size / self.num_replicas)
+        self.num_samples = (
+            self.total_size
+            if self.keep_all
+            else math.ceil(self.total_size / self.num_replicas)
+        )
 
     def generate_batches_old(self):
         self.batch_indices = []
@@ -293,9 +300,9 @@ class ByChannelDistributedSampler(DistributedSampler):
             # deterministically shuffle based on epoch and seed
             g = torch.Generator()
             g.manual_seed(self.seed + self.epoch)
-            indices = torch.randperm(len(self.batch_indices), generator=g).tolist()  # type: ignore[arg-type]
+            indices = torch.randperm(len(self.batch_indices), generator=g).tolist()
         else:
-            indices = list(range(len(self.batch_indices)))  # type: ignore[arg-type]
+            indices = list(range(len(self.batch_indices)))
 
         if not self.drop_last:
             # add extra samples to make it evenly divisible
@@ -316,11 +323,17 @@ class ByChannelDistributedSampler(DistributedSampler):
         assert len(indices) % self.num_replicas == 0
 
         # subsample
-        indices = indices[self.rank : final_size : self.num_replicas]
-        assert len(indices) == self.num_samples
+        if not self.keep_all:
+            indices = indices[self.rank : final_size : self.num_replicas]
+            assert len(indices) == self.num_samples
 
         # This is what changed compared to the DistributedSampler super-class
         batch_indices = [self.batch_indices[i] for i in indices]
+
+        print(
+            f"[Sampler] # {int(os.getenv('SLURM_PROCID', '0'))}-Batches ({self.mode}): {len(batch_indices)}",
+            file=sys.stderr,
+        )
 
         return iter(batch_indices)
 

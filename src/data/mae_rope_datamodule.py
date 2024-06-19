@@ -21,7 +21,12 @@ from lightning import LightningDataModule
 import torchaudio
 import wandb
 
-from src.data.mae_rope_dataset import PathDataset, TrialDataset, ChannelDataset
+from src.data.mae_rope_dataset import (
+    PathDataset,
+    RawDataset,
+    TrialDataset,
+    ChannelDataset,
+)
 from src.data.mae_rope_distributedsampler import ByChannelDistributedSampler
 from src.data.transforms import (
     crop_spg,
@@ -99,13 +104,33 @@ class TrainDataModule(LightningDataModule):
     # == Setup ==========================================================================================================================
 
     def setup(self, stage=None):
-        index, index_lens = filter_index_simple(
+        index = filter_index_simple(
             index_paths=self.source_indices,
             path_prefix=self.path_prefix,
             min_duration=self.min_duration,
             max_duration=self.max_duration,
             discard_sr=self.discard_sr,
             discard_datasets=self.discard_datasets,
+        )
+
+        random.seed(42)
+        random.shuffle(index)
+
+        slurm_rank = int(os.getenv("SLURM_PROCID", "0"))
+        slurm_size = int(os.getenv("SLURM_NPROCS", "1"))
+
+        chunk_size = len(index) // slurm_size
+        start_index = slurm_rank * chunk_size
+        end_index = (
+            start_index + chunk_size if slurm_rank < slurm_size - 1 else len(index)
+        )
+
+        index = index[start_index:end_index]
+        index = index[:500]
+
+        # Use the subset of the index for further processing
+        print(
+            f"Rank {slurm_rank} is processing indices from {start_index} to {end_index}"
         )
 
         trial_index = load_from_index(
@@ -122,7 +147,6 @@ class TrainDataModule(LightningDataModule):
         nr_trials_excluded = 0
 
         for _, trial_info in trial_index.items():
-            # full_trial_index[num_trials] = trial_info
             if (
                 "origin_path" in trial_info
                 and trial_info["origin_path"] in test_trial_paths
@@ -140,6 +164,7 @@ class TrainDataModule(LightningDataModule):
                         "channel": chn,
                         "sr": trial_info["sr"],
                         "dur": dur,
+                        "path": trial_info["origin_path"],
                         "trial_idx": num_trials,
                         "Dataset": trial_info["Dataset"],
                         "SubjectID": trial_info["SubjectID"],
@@ -152,102 +177,19 @@ class TrainDataModule(LightningDataModule):
         print(f"[setup] This is {int(data_seconds)} seconds (single-channel).")
         print(f"[setup] We excluded {nr_trials_excluded} test trials.")
 
-    def setup_old(self, stage=None):
-
-        # Load information on what files to exclude
-        test_trial_paths = set()
-        with open(
-            "/home/maxihuber/eeg-foundation/src/data/components/mi_test_paths.json", "r"
-        ) as file:
-            mi_test_paths = json.load(file)
-            test_trial_paths.update(mi_test_paths)
-        with open(
-            "/home/maxihuber/eeg-foundation/src/data/components/erp_test_paths.json",
-            "r",
-        ) as file:
-            erp_test_paths = json.load(file)
-            test_trial_paths.update(erp_test_paths)
-        print("[setup] # Test files:", len(test_trial_paths))
-
-        paths_to_data_index = []
-
-        for stor_dir, data_index_pattern in zip(
-            self.stor_dirs, self.data_index_patterns
-        ):
-            pattern = os.path.join(stor_dir, data_index_pattern)
-            print("[setup] file pattern", pattern, file=sys.stderr)
-            paths_to_data_index.append(natsorted(glob.glob(os.path.join(pattern))))
-
-        paths_to_data_index = [
-            path for sublist in paths_to_data_index for path in sublist
-        ]
-        print("[setup] Collecting data from these files:", paths_to_data_index)
-
-        full_channel_index = {}
-        num_trials = 0
-        num_signals = 0
-        data_seconds = 0
-        nr_trials_excluded = 0
-
-        for path_to_data_index in paths_to_data_index:
-            with open(path_to_data_index, "r") as index_file:
-                # Read information about a subset of the files
-                trial_index = json.load(index_file)
-                for _, trial_info in trial_index.items():
-                    # full_trial_index[num_trials] = trial_info
-                    if (
-                        "origin_path" in trial_info
-                        and trial_info["origin_path"] in test_trial_paths
-                    ):
-                        nr_trials_excluded += 1
-                        continue
-                    else:
-                        for chn, path, dur in zip(
-                            trial_info["channels"],
-                            trial_info["paths"],
-                            trial_info["durs"],
-                        ):
-                            full_channel_index[num_signals] = {
-                                "path": path,
-                                "channel": chn,
-                                "sr": trial_info["sr"],
-                                "dur": dur,
-                                "trial_idx": num_trials,
-                                "Dataset": trial_info["Dataset"],
-                                "SubjectID": trial_info["SubjectID"],
-                            }
-                            num_signals += 1
-                            data_seconds += dur
-                    num_trials += 1
-            print(f"[setup] Loaded +{int(data_seconds)} from {path_to_data_index}.")
-
-        print(f"[setup] We have data from {num_trials} trials.")
-        print(f"[setup] This is {int(data_seconds)} seconds (single-channel).")
-        print(f"[setup] We excluded {nr_trials_excluded} test trials.")
-
-        print(
-            "[setup] Truncated trial index:",
-            {
-                channel_idx: full_channel_index[channel_idx]
-                for channel_idx in full_channel_index
-                if channel_idx < 5
-            },
-            file=sys.stderr,
-        )
-
         keys = list(full_channel_index.keys())
         train_keys, val_keys = train_test_split(
             keys,
             train_size=self.train_val_split[0],
             test_size=self.train_val_split[1],
-            random_state=0,
+            random_state=42,
         )
 
         train_channel_index = {key: full_channel_index[key] for key in train_keys}
         val_channel_index = {key: full_channel_index[key] for key in val_keys}
 
-        self.train_dataset = ChannelDataset(train_channel_index)
-        self.val_dataset = ChannelDataset(val_channel_index)
+        self.train_dataset = RawDataset(train_channel_index)
+        self.val_dataset = RawDataset(val_channel_index)
 
         self.train_sampler = ByChannelDistributedSampler(
             mode="train",
@@ -260,6 +202,7 @@ class TrainDataModule(LightningDataModule):
             win_shift_factor=self.win_shift_factor,
             shuffle=True,
             seed=0,
+            keep_all=True,
         )
 
         self.val_sampler = ByChannelDistributedSampler(
@@ -273,6 +216,7 @@ class TrainDataModule(LightningDataModule):
             win_shift_factor=self.win_shift_factor,
             shuffle=False,
             seed=0,
+            keep_all=True,
         )
 
     # == Collate Functions ===============================================================================================================
@@ -302,17 +246,10 @@ class TrainDataModule(LightningDataModule):
             for win_shift in self.win_shifts
             if self.train_sampler.get_nr_y_patches(win_shift, sr) >= 1
             and self.train_sampler.get_nr_x_patches(win_shift, min_dur) >= 1
-            and sum(
-                [
-                    self.train_sampler.get_nr_patches(win_shift, sr, sample["dur"])
-                    for sample in batch
-                ]
-            )
-            < self.max_nr_patches
         ]
         assert (
             len(valid_win_shifts) > 0
-        ), "[snake_collate_fn] No valid valid_win_shifts found"
+        ), f"[snake_collate_fn] No valid valid_win_shifts found, {[sample['sr'] for sample in batch]}, {[sample['dur'] for sample in batch]}"
 
         # print("[snake_collate_fn] Sampling set:", valid_win_shifts, file=sys.stderr)
         win_size = random.choice(valid_win_shifts)

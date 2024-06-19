@@ -3,10 +3,11 @@
 #SBATCH --output=/home/maxihuber/eeg-foundation/runs/sbatch/train_%j.out
 #SBATCH --error=/home/maxihuber/eeg-foundation/runs/sbatch/train_%j.err
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:0
+#SBATCH --gres=gpu:1
 #SBATCH --open-mode=append
-#SBATCH --mem=700G
-#SBATCH --job-name=mi_lr_im
+#SBATCH --mem=100G
+#SBATCH --job-name=finetune
+#SBATCH --nodelist=tikgpu10
 
 # Exit on errors
 set -o errexit
@@ -30,7 +31,7 @@ done
 
 # Binary or script to execute
 # make visualize
-srun python /home/maxihuber/eeg-foundation/src/finetune/BCI/FinetuneDev-Run.py
+srun python /home/maxihuber/eeg-foundation/src/keepgpu.py
 
 # Send more noteworthy information to the output log
 echo "Finished at:     $(date)"

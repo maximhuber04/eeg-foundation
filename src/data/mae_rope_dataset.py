@@ -26,6 +26,9 @@ class RawDataset(Dataset):
             "dur": channel_info["dur"],
         }
 
+    def __len__(self):
+        return len(self.channel_index)
+
 
 class ChannelDataset(Dataset):
     def __init__(self, channel_index):

@@ -1,4 +1,5 @@
 from itertools import repeat
+import math
 
 import torch
 import torch.nn as nn
@@ -37,20 +38,28 @@ class PatchEmbed(nn.Module):
 def random_masking_smart(x, mask_ratio, nr_meta_tokens):
     B, N, D = x.shape
 
-    num_tokens_to_mask = int((N - nr_meta_tokens) * mask_ratio)
+    assert N - nr_meta_tokens > 0, "N - nr_meta_tokens = {N - nr_meta_tokens}"
+    num_tokens_to_keep = int(math.ceil((N - nr_meta_tokens) * (1 - mask_ratio)))
 
+    # indices we keep
     rand_indices, _ = (
         torch.rand(B, N - nr_meta_tokens, device=x.device)
-        .argsort(dim=1)[:, :num_tokens_to_mask]
+        .argsort(dim=1)[:, :num_tokens_to_keep]
         .sort(dim=1)
     )
     rand_indices += nr_meta_tokens
 
-    # Boolean mask
+    # Add True values at positions we keep
     mask = torch.zeros(B, N, dtype=torch.bool, device=x.device)
     mask.scatter_(1, rand_indices, True)
 
-    # Zero out the patches at the chosen indices
-    x = x.masked_fill(mask.unsqueeze(-1), 0)
+    # Fill mask[:, :nr_meta_tokens] with True (always keep metadata tokens)
+    mask[:, :nr_meta_tokens] = True
 
-    return x, mask
+    # Indices to restore in decoder
+    # TODO: possible to make faster / more memory efficient?
+    kept_indices = torch.nonzero(mask, as_tuple=True)[1].reshape(B, -1)
+    masked_indices = torch.nonzero(~mask, as_tuple=True)[1].reshape(B, -1)
+    ids_restore = torch.cat([kept_indices, masked_indices], dim=1)
+
+    return mask, ids_restore

@@ -75,10 +75,10 @@ du:
 	du -sh /scratch/mae
 
 cpu:
-	srun --time 700 --gres=gpu:0 --mem=300G --pty bash -i
+	srun --time 700 --gres=gpu:0 --mem=50G --pty bash -i
 
 gpu:
-	srun --time 700 --gres=gpu:1 --mem=300G --pty bash -i
+	srun --time 700 --gres=gpu:1 --mem=1000G --nodelist=tikgpu10 --pty bash -i
 
 cpu2:
 	srun --time 700 --gres=gpu:0 --mem=50G --nodelist=artongpu01 --pty bash -i
@@ -90,7 +90,7 @@ cpu10:
 	srun --time 700 --gres=gpu:0 --mem=50G --nodelist=tikgpu10 --pty bash -i
 
 gpu10:
-	srun --time 700 --gres=gpu:1 --mem=320G --nodelist=tikgpu10 --pty bash -i
+	srun --time 700 --gres=gpu:1 --mem=1000G --nodelist=tikgpu10 --pty bash -i
 
 jupyter:
 	jupyter notebook --no-browser --port 5951 --ip $$(hostname -f)
