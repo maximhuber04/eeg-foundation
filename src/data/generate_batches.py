@@ -1,119 +1,18 @@
-import math
-import os
-import sys
-import time
-import numpy as np
-
+import random
 import torch
-from torch.utils.data.distributed import DistributedSampler
-import torch.distributed as dist
 from tqdm import tqdm
 
 
-class PresampledDistributedSampler(DistributedSampler):
+class BatchGenerator:
     def __init__(
-        self,
-        mode,
-        dataset,
-        batch_indices,
-        patch_size=16,
-        max_nr_patches=8_500,
-        win_shifts=[0.25, 0.5, 1, 2, 4, 8],
-        win_shift_factor=0.25,
-        shuffle=True,
-        seed=0,
+        self, patch_size, win_shifts, win_shift_factor, max_nr_patches, seed, epoch
     ):
-        super().__init__(dataset=dataset)
-
-        self.mode = mode
-        self.dataset = dataset
-        self.batch_indices = batch_indices
-        self.shuffle = shuffle
-        self.seed = seed
-        self.epoch = 0
-
-    def __iter__(self):
-        if self.shuffle:
-            g = torch.Generator()
-            g.manual_seed(self.seed + self.epoch)
-            indices = torch.randperm(len(self.batch_indices), generator=g).tolist()
-        else:
-            indices = list(range(len(self.batch_indices)))
-        self.batch_indices = [self.batch_indices[i] for i in indices]
-        return iter(self.batch_indices)
-
-    def __len__(self):
-        return len(self.batch_indices)
-
-
-class ByChannelDistributedSampler(DistributedSampler):
-    def __init__(
-        self,
-        mode,
-        dataset,
-        keys,
-        recompute_freq=1,
-        drop_last=False,
-        patch_size=16,
-        max_nr_patches=8_500,
-        win_shifts=[0.25, 0.5, 1, 2, 4, 8],
-        win_shift_factor=0.25,
-        num_replicas=None,
-        rank=None,
-        shuffle=True,
-        seed=0,
-        keep_all=False,
-    ):
-        super().__init__(dataset=dataset, drop_last=drop_last)
-
-        self.mode = mode
-
-        self.dataset = dataset
-        self.keys = keys
-        self.recompute_freq = recompute_freq
-
-        self.drop_last = drop_last
-
-        # Group channels in subset_indices by (subject, trial)
-        id_to_sr_to_trial_to_channels = {}
-        for idx, channel_idx in enumerate(self.keys):
-            channel_info = self.dataset.channel_index[channel_idx]
-            subject_id = channel_info["SubjectID"]
-            sr = channel_info["sr"]
-            trial_idx = channel_info["trial_idx"]
-            if subject_id not in id_to_sr_to_trial_to_channels:
-                id_to_sr_to_trial_to_channels[subject_id] = {sr: {trial_idx: [idx]}}
-            elif sr not in id_to_sr_to_trial_to_channels[subject_id]:
-                id_to_sr_to_trial_to_channels[subject_id][sr] = {trial_idx: [idx]}
-            elif trial_idx not in id_to_sr_to_trial_to_channels[subject_id][sr]:
-                id_to_sr_to_trial_to_channels[subject_id][sr][trial_idx] = [idx]
-            else:
-                id_to_sr_to_trial_to_channels[subject_id][sr][trial_idx].append(idx)
-        self.id_to_sr_to_trial_to_channels = id_to_sr_to_trial_to_channels
-
-        print(f"[Sampler] # {mode}-Subjects: {len(id_to_sr_to_trial_to_channels)}")
-
         self.patch_size = patch_size
-        self.max_nr_patches = max_nr_patches
         self.win_shifts = win_shifts
         self.win_shift_factor = win_shift_factor
-
-        self.num_replicas = (
-            num_replicas if num_replicas is not None else dist.get_world_size()
-        )
-        self.rank = rank if rank is not None else dist.get_rank()
-
-        self.shuffle = shuffle
+        self.max_nr_patches = max_nr_patches
         self.seed = seed
-        self.epoch = 0
-        self.keep_all = keep_all
-
-        start_time = time.time()
-        self.generate_batches()
-        print(
-            f"[Sampler] # {mode}-GenerateBatches took: {round(time.time() - start_time,2)}s",
-            file=sys.stderr,
-        )
+        self.epoch = epoch
 
     def get_nr_y_patches(self, win_size, sr):
         return int((sr / 2 * win_size + 1) / self.patch_size)
@@ -151,14 +50,14 @@ class ByChannelDistributedSampler(DistributedSampler):
         max_win_shift = max(self.get_suitable_win_sizes(sr, dur))
         return self.get_nr_y_patches(win_size=max_win_shift, sr=sr)
 
-    def generate_batches(self):
-        self.batch_indices = []
+    def generate_batches(self, id_to_sr_to_trial_to_channels, full_channel_index):
+        batch_indices = []
 
         for (
             subject_id,
             sr_to_trial_to_channels,
         ) in tqdm(
-            self.id_to_sr_to_trial_to_channels.items(),
+            id_to_sr_to_trial_to_channels.items(),
             desc="Generating batches",
             position=0,
             leave=True,
@@ -181,8 +80,7 @@ class ByChannelDistributedSampler(DistributedSampler):
 
                     # Assert all durations are the same
                     durs = [
-                        int(self.dataset.channel_index[self.keys[idx]]["dur"])
-                        for idx in channels
+                        int(full_channel_index[channel]["dur"]) for channel in channels
                     ]
                     assert all(
                         [dur == durs[0] for dur in durs]
@@ -193,10 +91,9 @@ class ByChannelDistributedSampler(DistributedSampler):
                     # in the TUEG dataset
                     batch_dur = durs[0]
 
-                    for idx in channels:
+                    for channel_idx in channels:
 
-                        channel_idx = self.keys[idx]
-                        channel_info = self.dataset.channel_index[channel_idx]
+                        channel_info = full_channel_index[channel_idx]
 
                         new_patches = self.get_max_nr_patches(
                             sr=channel_info["sr"],
@@ -229,7 +126,7 @@ class ByChannelDistributedSampler(DistributedSampler):
                                 assert (
                                     current_nr_patches <= self.max_nr_patches
                                 ), f"1: current_nr_patches={current_nr_patches} > max_nr_patches={self.max_nr_patches}"
-                                self.batch_indices.append(current_batch)
+                                batch_indices.append(current_batch)
                             # Start a new batch
                             if new_patches > self.max_nr_patches:
                                 max_durs = [
@@ -263,7 +160,7 @@ class ByChannelDistributedSampler(DistributedSampler):
                                             max_dur,
                                         )
                                     ]
-                                    self.batch_indices.append(current_batch)
+                                    batch_indices.append(current_batch)
                                 current_batch = []
                                 current_nr_patches = 0
                             else:
@@ -282,67 +179,7 @@ class ByChannelDistributedSampler(DistributedSampler):
                         assert (
                             current_nr_patches <= self.max_nr_patches
                         ), f"2: current_nr_patches={current_nr_patches} > max_nr_patches={self.max_nr_patches}"
-                        self.batch_indices.append(current_batch)
+                        batch_indices.append(current_batch)
 
-        self.total_size = len(self.batch_indices)
-        self.num_samples = (
-            self.total_size
-            if self.keep_all
-            else math.ceil(self.total_size / self.num_replicas)
-        )
-
-        print(
-            f"[generate_batches] Finished creating batches. Total size = {self.total_size}, num_samples = {self.num_samples}",
-            file=sys.stderr,
-        )
-
-    def __iter__(self):
-        if self.shuffle:
-            # deterministically shuffle based on epoch and seed
-            g = torch.Generator()
-            g.manual_seed(self.seed + self.epoch)
-            indices = torch.randperm(len(self.batch_indices), generator=g).tolist()
-        else:
-            indices = list(range(len(self.batch_indices)))
-
-        if not self.drop_last:
-            # add extra samples to make it evenly divisible by num_replicas
-            padding_size = 0
-            while (self.total_size + padding_size) % self.num_replicas != 0:
-                padding_size += 1
-            final_size = self.total_size + padding_size
-            if padding_size <= len(indices):
-                indices += indices[:padding_size]
-            else:
-                indices += (indices * math.ceil(padding_size / len(indices)))[
-                    :padding_size
-                ]
-        else:
-            # remove tail of data to make it evenly divisible by num_replicas
-            final_size = self.total_size // self.num_replicas * self.num_replicas
-            indices = indices[:final_size]
-        assert len(indices) % self.num_replicas == 0
-
-        # subsample
-        if not self.keep_all:
-            indices = indices[self.rank : final_size : self.num_replicas]
-            assert len(indices) == self.num_samples
-
-        # This is what changed compared to the DistributedSampler super-class
-        batch_indices = [self.batch_indices[i] for i in indices]
-
-        print(
-            f"[Sampler] # {int(os.getenv('SLURM_PROCID', '0'))}-Batches ({self.mode}): {len(batch_indices)}",
-            file=sys.stderr,
-        )
-
-        return iter(batch_indices)
-
-    def __len__(self):
-        return self.num_samples
-
-    def set_epoch(self, epoch):
-        self.epoch = epoch
-        if self.shuffle:
-            # recompute batches
-            self.generate_batches()
+        self.epoch += 1
+        return batch_indices

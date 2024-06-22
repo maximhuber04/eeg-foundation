@@ -6,6 +6,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from math import ceil
 
 import mne
+
+mne.set_log_level("WARNING")
+
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -101,7 +104,7 @@ def filter_index_simple(
                 and index_element["Dataset"] not in discard_datasets
             ):
                 # the edf index comes with relative, the csv index with absolute paths
-                if index_element["path"].endswith(".edf"):
+                if "itet-stor" not in index_element["path"]:
                     index_element["path"] = path_prefix + index_element["path"]
                 filtered_index.append(index_element)
                 if index_path not in index_lens:
@@ -209,6 +212,180 @@ class load_path_data:
             channel_data_dict[channel] = data.flatten()
 
         return channel_data_dict
+
+
+def get_generic_channel_name(channel_name):
+    channel_name = channel_name.lower()
+    # Remove "eeg " prefix if present
+    if channel_name.startswith("eeg "):
+        channel_name = channel_name[4:]
+    # Simplify names with a dash and check if it ends with "-"
+    if "-" in channel_name:
+        if channel_name.endswith("-"):
+            return "None"
+        return channel_name.split("-")[0]
+    return channel_name
+
+
+def load_edf_to_dataframe(file_path):
+    eeg_data = mne.io.read_raw_edf(file_path, preload=True)
+    channel_data_dict = {}
+
+    for channel in eeg_data.ch_names:
+        idx = eeg_data.ch_names.index(channel)
+        # channel = get_generic_channel_name(channel)
+        data, times = eeg_data[idx, :]
+        data *= 1_000_000  # Convert to uV
+        channel_data_dict[channel] = data.flatten()
+
+    df = pd.DataFrame(channel_data_dict)
+    df["Time in Seconds"] = times.flatten()
+    return df
+
+
+def load_from_path(path, channels, sr, chn=None):
+    if path.endswith("edf"):
+        eeg_data = mne.io.read_raw_edf(
+            path,
+            include=channels,
+            preload=True,
+        )
+    elif path.endswith("pkl"):
+        with open(path, "rb") as file:
+            df = pd.read_pickle(file)
+            eeg_data = create_raw(
+                data=df,
+                ch_names1=channels,
+                sr=sr,
+            )
+    elif path.endswith("fif"):
+        eeg_data = mne.io.read_raw_fif(path, preload=True)
+    else:
+        assert False, f"Invalid file type in {path}."
+
+    # Add average reference
+    eeg_data = avg_channel(eeg_data)
+
+    if chn is not None:
+        # return a numpy array for this channel
+        for channel in eeg_data.ch_names:
+            if channel != chn:
+                continue
+            idx = eeg_data.ch_names.index(channel)
+            data, times = eeg_data[idx, :]
+            data = data.flatten()
+            data *= 1_000_000
+            return data
+
+    else:
+        # Datastructure to access data for each channel
+        channel_data_dict = {}
+        for channel in eeg_data.ch_names:
+            idx = eeg_data.ch_names.index(channel)
+            data, times = eeg_data[idx, :]
+            data *= 1_000_000  # Convert to uV
+            channel_data_dict[channel] = data.flatten()
+        df = pd.DataFrame(channel_data_dict)
+        df["Time in Seconds"] = times.flatten()
+        return df
+
+
+def load_trials(trial_info_index):
+    mne.set_log_level("WARNING")
+    trial_index = {}
+    for trial_idx, trial_info in tqdm(
+        trial_info_index.items(), desc="Loading data", position=0, leave=True
+    ):
+        file = trial_info["origin_path"]
+        df = load_from_path(file, trial_info["channels"], trial_info["sr"])
+        df = df.iloc[: int(trial_info["sr"] * trial_info["dur"]), :]
+        trial_index[trial_idx] = df
+    return trial_index
+
+
+def prepare_info_to_load(index_chunk, min_duration, max_duration, split_duration):
+    trial_index = {}  # Dict of paths to the saved signals & metadata.
+    num_trials = 0
+
+    for index_element in tqdm(
+        index_chunk, desc="Preparing data information", position=0, leave=True
+    ):
+        origin_dur = int(index_element["duration"])
+
+        if origin_dur < min_duration or origin_dur > max_duration:
+            continue
+
+        channels = (
+            index_element["good_channels"]
+            if "good_channels" in index_element
+            else index_element["channels"]
+        )
+
+        start_new_sample = 0
+        dur = origin_dur
+        while dur > min_duration:
+            dur_new_sample = min(dur, split_duration)
+            trial_info = {
+                "origin_path": index_element["path"],
+                "num_channels": len(channels),
+                "channels": channels,
+                "origin_dur": origin_dur,
+                "start": start_new_sample,
+                "dur": dur_new_sample,
+                "sr": index_element["sr"],
+                "ref": index_element["ref"],
+                "Dataset": index_element["Dataset"],
+                "SubjectID": index_element["SubjectID"],
+            }
+            trial_index[num_trials] = trial_info
+            num_trials += 1
+            start_new_sample += dur_new_sample
+            dur -= dur_new_sample
+
+    print(
+        f"[prepare_info_to_load] Prepared {num_trials} trials.",
+        file=sys.stderr,
+    )
+    return trial_index
+
+
+def info_from_index(index_chunk, min_duration, max_duration, split_duration):
+    trial_index = {}  # Dict of paths to the saved signals & metadata.
+    channel_set = set()
+    num_trials = 0
+
+    print("Starting to save the trials locally", file=sys.stderr)
+
+    for num_processed_elements, index_element in enumerate(
+        tqdm(index_chunk, desc="Loading data information", position=0, leave=True)
+    ):
+        dur = int(index_element["duration"])
+
+        if dur < min_duration or dur > max_duration:
+            continue
+
+        channels = (
+            index_element["good_channels"]
+            if "good_channels" in index_element
+            else index_element["channels"]
+        )
+
+        trial_info = {
+            "origin_path": index_element["path"],
+            "num_channels": len(channels),
+            "channels": channels,
+            "dur": min(dur, split_duration),
+            "sr": index_element["sr"],
+            "ref": index_element["ref"],
+            "Dataset": index_element["Dataset"],
+            "SubjectID": index_element["SubjectID"],
+        }
+
+        trial_index[num_trials] = trial_info
+        num_trials += 1
+
+    print(f"[load_from_index] Read {num_trials} trials on process.", file=sys.stderr)
+    return trial_index
 
 
 def load_from_index(index_chunk, min_duration, max_duration):

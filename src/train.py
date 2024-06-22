@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import hydra
 import psutil
 from lightning import Callback, LightningDataModule, LightningModule
-from lightning.pytorch.callbacks import LearningRateMonitor
+from lightning.pytorch.callbacks import ModelCheckpoint, LearningRateMonitor
 from lightning.pytorch.accelerators import find_usable_cuda_devices
 from omegaconf import DictConfig
 

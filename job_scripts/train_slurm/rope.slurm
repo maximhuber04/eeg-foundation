@@ -1,16 +1,16 @@
 #!/bin/bash
 
-#SBATCH --mail-type=BEGIN,END,FAIL,REQUEUE         # mail configuration: NONE, BEGIN, END, FAIL, REQUEUE, ALL
+#SBATCH --mail-type=BEGIN,END,FAIL,REQUEUE
 #SBATCH --output=/itet-stor/maxihuber/net_scratch/runs/%j/train_%j.out
 #SBATCH --error=/itet-stor/maxihuber/net_scratch/runs/%j/train_%j.err
 #SBATCH --open-mode=append
 #SBATCH --job-name=pretrain
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:2
-#SBATCH --ntasks-per-node=2
+#SBATCH --gres=gpu:5
+#SBATCH --ntasks-per-node=5
 #SBATCH --cpus-per-task=10
-#SBATCH --mem=350G
-#SBATCH --nodelist=tikgpu08
+#SBATCH --mem=1250G
+#SBATCH --nodelist=tikgpu10
 
 # Create directories for job
 mkdir -p /itet-stor/maxihuber/net_scratch/runs/$SLURM_JOB_ID

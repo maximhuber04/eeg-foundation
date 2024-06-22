@@ -258,9 +258,7 @@ def create_raw(
         ch_names2 = ch_names1
     ch_types = ["eeg" for _ in range(len(ch_names1))]
     info = mne.create_info(ch_names2, ch_types=ch_types, sfreq=sr)
-    eeg_data = (
-        np.array(data[ch_names1].T, dtype="float") / 1_000_000
-    )  # in Volt # TODO not sure if each dataset is in uv
+    eeg_data = np.array(data[ch_names1].T, dtype="float") / 1_000_000
     raw = mne.io.RawArray(eeg_data, info)
     return raw
 
@@ -313,6 +311,7 @@ class load_path_data:
             idx = eeg_data.ch_names.index(channel)
             data, times = eeg_data[idx, :]
             # Flatten the data to 1D if required
+            data *= 1_000_000  # convert to uV
             channel_data_dict[channel] = data.flatten()
 
         return channel_data_dict

@@ -1,13 +1,15 @@
 #!/bin/bash
+
 #SBATCH --mail-type=ALL         # mail configuration: NONE, BEGIN, END, FAIL, REQUEUE, ALL
 #SBATCH --output=/home/maxihuber/eeg-foundation/runs/sbatch/train_%j.out
 #SBATCH --error=/home/maxihuber/eeg-foundation/runs/sbatch/train_%j.err
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:2
+#SBATCH --gres=gpu:4
+#SBATCH --ntasks-per-node=4
 #SBATCH --open-mode=append
-#SBATCH --mem=20G
-#SBATCH --job-name=finetune
-#SBATCH --nodelist=tikgpu08
+#SBATCH --mem=1200G
+#SBATCH --job-name=load
+#SBATCH --nodelist=tikgpu10
 
 # Exit on errors
 set -o errexit
@@ -31,7 +33,7 @@ done
 
 # Binary or script to execute
 # make visualize
-srun python /home/maxihuber/eeg-foundation/src/keepgpu.py
+srun python /home/maxihuber/eeg-foundation/src/data/load_to_node.py
 
 # Send more noteworthy information to the output log
 echo "Finished at:     $(date)"

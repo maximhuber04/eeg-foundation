@@ -1,3 +1,4 @@
+import gc
 import sys
 from matplotlib import pyplot as plt
 import numpy as np
@@ -42,10 +43,7 @@ class MAEModuleRoPE(LightningModule):
         return self.net(x)
 
     def training_step(self, batch, batch_idx):
-        train_loss, flattened_pred, masked_indices = self(batch)
-
-        # print("[training step] train_loss:", train_loss.detach())
-        # self.log("train_loss", train_loss, rank_zero_only=False, sync_dist=True)
+        train_loss, flattened_pred, mask = self(batch)
 
         # Logging
         if self.trainer.global_step % self.train_log_frq_loss == 0:
@@ -54,11 +52,9 @@ class MAEModuleRoPE(LightningModule):
                 step=self.trainer.global_step,
             )
         if self.trainer.global_step % self.log_frq_lr == 0:
-            current_lr = self.trainer.optimizers[0].param_groups[0]["lr"]
-            wandb.log(
-                {"learning_rate": current_lr},
-                step=self.trainer.global_step,
-            )
+            # run garbage collection at regular interval instead of logging lr,
+            # as it's been moved to on_train_epoch_start()
+            gc.collect()
 
         # Plotting
         if self.trainer.global_step % self.train_log_frq_imgs == 0:
@@ -67,7 +63,7 @@ class MAEModuleRoPE(LightningModule):
         return train_loss
 
     def validation_step(self, batch, batch_idx):
-        val_loss, flattened_pred, masked_indices = self(batch)
+        val_loss, flattened_pred, mask = self(batch)
 
         # For checkpointing: log the validation loss with self.log
         self.log(
@@ -78,15 +74,18 @@ class MAEModuleRoPE(LightningModule):
             batch_size=batch["batch"].shape[0],
         )
 
+        # Use a custom step for validation logs to avoid conflicts
+        custom_step = self.trainer.global_step + batch_idx
+
         # Logging
-        if self.trainer.global_step % self.val_log_frq_loss == 0:
+        if custom_step % self.val_log_frq_loss == 0:
             wandb.log(
                 {"val_loss": val_loss.detach()},
-                step=self.trainer.global_step,
+                step=custom_step,
             )
 
         # Plotting
-        if self.trainer.global_step % self.val_log_frq_imgs == 0:
+        if custom_step % self.val_log_frq_imgs == 0:
             self.plot_spgs(batch, log_tag="val")
 
         return val_loss
@@ -94,9 +93,16 @@ class MAEModuleRoPE(LightningModule):
     def test_step(self, batch, batch_idx):
         pass
 
-    # == Checkpoints ====================================================================================================================
+    # == Callbacks ======================================================================================================================
 
-    # None atm
+    def on_train_epoch_start(self):
+        current_lr = self.trainer.optimizers[0].param_groups[0]["lr"]
+        wandb.log(
+            {"learning_rate": current_lr},
+            step=self.trainer.global_step,
+        )
+
+    # == Checkpoints ====================================================================================================================
 
     # == Helpers ========================================================================================================================
 
@@ -108,7 +114,7 @@ class MAEModuleRoPE(LightningModule):
         lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer=optimizer,
             factor=0.5,
-            patience=1,
+            patience=2,
             threshold=0.05,
             threshold_mode="rel",
             verbose=True,
@@ -121,14 +127,14 @@ class MAEModuleRoPE(LightningModule):
             },
         }
 
-    def plot_and_log(self, image, title):
-
-        plt.pcolormesh(image, shading="auto", cmap="viridis")
-        plt.ylabel("Frequency Bins")
-        plt.xlabel("Steps")
+    def plot_spg_and_log(self, spg, title, shift):
+        sr = int(2 * (spg.shape[0]) / shift)
+        dur = int((spg.shape[1]) * shift * 0.25)
+        plt.pcolormesh(spg, shading="auto", cmap="RdBu")
         plt.title(title)
+        plt.ylabel(f"Frequency Bins [sr=~{sr}]")
+        plt.xlabel(f"Steps [dur=~{dur}, shift={shift}]")
         plt.colorbar(label="")
-
         wandb.log(
             {title: [wandb.Image(plt)]},
             step=self.trainer.global_step,
@@ -141,50 +147,43 @@ class MAEModuleRoPE(LightningModule):
         with torch.no_grad():
 
             B, C, H, W = batch["batch"].shape
-            # print(f"[plot_spgs] batch.shape: {batch['batch'].shape}")
 
             # == Input Image ==
-
             sample_input_image = batch["batch"][0][0].cpu().numpy()
 
-            self.plot_and_log(
-                image=sample_input_image,
+            self.plot_spg_and_log(
+                spg=sample_input_image,
                 title=f"{log_tag}_input",
+                shift=batch["win_size"],
             )
 
             # == Masked Input Image ==
-
             _, flattened_pred, mask = self.net.forward(batch)
 
             flattened_batch = self.net.patchify(batch["batch"], B, H, W)
-            # print(f"[plot_spgs] flattened_batch.shape: {flattened_batch.shape}")
             B, N, D = flattened_batch.shape
 
             # Apply the mask
             masked_flattened_batch = flattened_batch.masked_fill_(
                 (~mask).unsqueeze(-1), 0
             )
-            # print(f"[plot_spgs] masked_flattened_batch.shape: {flattened_batch.shape}")
 
             masked_batch = self.net.unpatchify(masked_flattened_batch, B, H, W)
-            # print(
-            #     "[plot_spgs] masked_batch.shape:", masked_batch.shape, file=sys.stderr
-            # )
-
             masked_sample_input_image = masked_batch[0][0].cpu().numpy()
 
-            self.plot_and_log(
-                image=masked_sample_input_image,
+            self.plot_spg_and_log(
+                spg=masked_sample_input_image,
                 title=f"{log_tag}_masked_input",
+                shift=batch["win_size"],
             )
 
             # == Predicted Output Image ==
-
             pred = self.net.unpatchify(flattened_pred, B, H, W)
 
             sample_output_image = pred[0][0].cpu().numpy()
 
-            self.plot_and_log(
-                image=sample_output_image,
+            self.plot_spg_and_log(
+                spg=sample_output_image,
                 title=f"{log_tag}_predicted",
+                shift=batch["win_size"],
             )

@@ -199,6 +199,7 @@ class ModularMaskedAutoencoderViTRoPE(nn.Module):
 
         # timm's trunc_normal_(std=.02) is effectively normal_(std=0.02) as cutoff is too big (2.)
         torch.nn.init.normal_(self.encoder.cls_token, std=0.02)
+        torch.nn.init.normal_(self.decoder.mask_token, std=0.02)
 
         for wrapper in self.encoder.channel_encoding_map.values():
             torch.nn.init.normal_(wrapper.param, std=0.02)
@@ -245,7 +246,7 @@ class ModularMaskedAutoencoderViTRoPE(nn.Module):
         # print("[forward_loss] loss.shape after mean(dim=-1):", loss.shape)
 
         # compute reconstruction loss only where we threw away patches!!
-        # loss = loss[~mask].view(B, -1)
+        loss = loss[~mask].view(B, -1)
         # print("[forward_loss] NaN in loss3:", torch.isnan(loss).any())
         # print("[forward_loss] loss.shape after mask:", loss.shape)
 

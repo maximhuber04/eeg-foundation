@@ -3,18 +3,49 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-
-# == Define Datasets ==
+from src.utils.preloading.utils import load_from_path
 
 
 class RawDataset(Dataset):
+    def __init__(self, channel_index, trial_index):
+        self.channel_index = channel_index
+        self.trial_index = trial_index
+
+    def __getitem__(self, info):
+        channel_idx, start, dur = info
+        channel_info = self.channel_index[channel_idx]
+
+        trial_idx = self.channel_index[channel_idx]["trial_idx"]
+        signal = self.trial_index[trial_idx][channel_info["channel"]].to_numpy()
+        signal = signal[
+            int(start * channel_info["sr"]) : int((start + dur) * channel_info["sr"])
+        ]
+
+        return {
+            "signal": torch.tensor(signal),
+            "path": channel_info["path"],
+            "channel": channel_info["channel"],
+            "sr": channel_info["sr"],
+            "dur": channel_info["dur"],
+        }
+
+    def __len__(self):
+        return len(self.channel_index)
+
+
+class LocalStorageDataset(Dataset):
     def __init__(self, channel_index):
         self.channel_index = channel_index
 
     def __getitem__(self, info):
         idx, start, dur = info
         channel_info = self.channel_index[idx]
-        signal = channel_info["signal"]
+        signal = load_from_path(
+            path=channel_info["path"],
+            channels=channel_info["channels"],
+            sr=channel_info["sr"],
+            chn=channel_info["channel"],
+        )
         signal = signal[
             int(start * channel_info["sr"]) : int((start + dur) * channel_info["sr"])
         ]
