@@ -75,10 +75,13 @@ du:
 	du -sh /scratch/mae
 
 cpu:
-	srun --time 700 --gres=gpu:0 --mem=50G --pty bash -i
+	srun --time 700 --gres=gpu:0 --mem=10G --nodelist=tikgpu10 --pty bash -i
+
+cpu8:
+	srun --time 700 --gres=gpu:0 --mem=50G --nodelist=tikgpu08 --pty bash -i
 
 gpu:
-	srun --time 700 --gres=gpu:1 --mem=1000G --nodelist=tikgpu10 --pty bash -i
+	srun --time 700 --gres=gpu:1 --mem=100G --nodelist=tikgpu10 --pty bash -i
 
 cpu2:
 	srun --time 700 --gres=gpu:0 --mem=50G --nodelist=artongpu01 --pty bash -i
@@ -89,11 +92,14 @@ gpu2:
 cpu10:
 	srun --time 700 --gres=gpu:0 --mem=50G --nodelist=tikgpu10 --pty bash -i
 
+gpu8:
+	srun --time 700 --gres=gpu:1 --mem=100G --nodelist=tikgpu08 --pty bash -i
+
 gpu10:
-	srun --time 700 --gres=gpu:1 --mem=1000G --nodelist=tikgpu10 --pty bash -i
+	srun --time 700 --gres=gpu:1 --mem=100G --nodelist=tikgpu10 --pty bash -i
 
 jupyter:
-	jupyter notebook --no-browser --port 5951 --ip $$(hostname -f)
+	jupyter notebook --no-browser --port 5950 --ip $$(hostname -f)
 
 env:
 	conda activate fastenv

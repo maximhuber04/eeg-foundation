@@ -134,40 +134,6 @@ class TrainDataModule(LightningDataModule):
                         num_trials += 1
             print(f"[setup] # Trials = {num_trials}", file=sys.stderr)
 
-        full_channel_index = {}
-        num_signals = 0
-        data_seconds = 0
-        nr_trials_excluded = 0
-
-        for trial_idx, trial_info in trial_info_index.items():
-            for chn in trial_info["channels"]:
-                full_channel_index[num_signals] = {
-                    "channel": chn,
-                    "channels": trial_info["channels"],
-                    "sr": trial_info["sr"],
-                    "dur": trial_info["dur"],
-                    "path": (
-                        trial_info["new_path"]
-                        if "new_path" in trial_info
-                        else trial_info["origin_path"]
-                    ),
-                    "trial_idx": trial_idx,
-                    "Dataset": trial_info["Dataset"],
-                    "SubjectID": trial_info["SubjectID"],
-                }
-                num_signals += 1
-                data_seconds += trial_info["dur"]
-
-        print(
-            f"[setup] We have data from {len(trial_info_index)} trials.",
-            file=sys.stderr,
-        )
-        print(
-            f"[setup] This is {int(data_seconds)} seconds (single-channel).",
-            file=sys.stderr,
-        )
-        print(f"[setup] We excluded {nr_trials_excluded} test trials.", file=sys.stderr)
-
         # TODO: quick fix, only cause it's accessed in the collate_fn
         # this definition actually belongs within the next "if self.load_data" branch
         self.batch_generator = BatchGenerator(
@@ -177,6 +143,58 @@ class TrainDataModule(LightningDataModule):
             max_nr_patches=self.max_nr_patches - 500,
             seed=0,
             epoch=0,
+        )
+
+        full_channel_index = {}
+        num_signals = 0
+        data_seconds = 0
+        nr_test_excluded = 0
+        nr_failed_excluded = 0
+
+        for trial_idx, trial_info in trial_info_index.items():
+            # make sure nothing breaks in the sampler and collate_fn
+            if (
+                trial_info["dur"] >= self.min_duration
+                and trial_info["dur"] <= self.max_duration
+                and trial_info["sr"] not in self.discard_sr
+                and trial_info["Dataset"] not in self.discard_datasets
+                and self.batch_generator.get_suitable_win_sizes(
+                    sr=trial_info["sr"], dur=trial_info["dur"]
+                )
+                != []
+            ):
+                for chn in trial_info["channels"]:
+                    full_channel_index[num_signals] = {
+                        "channel": chn,
+                        "channels": trial_info["channels"],
+                        "sr": trial_info["sr"],
+                        "dur": trial_info["dur"],
+                        "path": (
+                            trial_info["new_path"]
+                            if "new_path" in trial_info
+                            else trial_info["origin_path"]
+                        ),
+                        "trial_idx": trial_idx,
+                        "Dataset": trial_info["Dataset"],
+                        "SubjectID": trial_info["SubjectID"],
+                    }
+                    num_signals += 1
+                    data_seconds += trial_info["dur"]
+            else:
+                nr_failed_excluded += 1
+
+        print(
+            f"[setup] We have data from {len(trial_info_index)} trials.",
+            file=sys.stderr,
+        )
+        print(
+            f"[setup] This is {int(data_seconds)} seconds (single-channel).",
+            file=sys.stderr,
+        )
+        print(f"[setup] We excluded {nr_test_excluded} test trials.", file=sys.stderr)
+        print(
+            f"[setup] We excluded {nr_failed_excluded} incompatible trials (spg.shape).",
+            file=sys.stderr,
         )
 
         if self.load_data:

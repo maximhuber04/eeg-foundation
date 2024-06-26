@@ -3,11 +3,11 @@
 #SBATCH --output=/home/maxihuber/eeg-foundation/runs/sbatch/train_%j.out
 #SBATCH --error=/home/maxihuber/eeg-foundation/runs/sbatch/train_%j.err
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:2
+#SBATCH --gres=gpu:5
 #SBATCH --open-mode=append
-#SBATCH --mem=20G
+#SBATCH --mem=1350G
 #SBATCH --job-name=finetune
-#SBATCH --nodelist=tikgpu08
+#SBATCH --nodelist=tikgpu10
 
 # Exit on errors
 set -o errexit

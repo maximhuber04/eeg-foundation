@@ -75,6 +75,36 @@ class ByChannelDistributedSampler(DistributedSampler):
         self.drop_last = drop_last
 
         # Group channels in subset_indices by (subject, trial)
+        self.id_to_sr_to_trial_to_channels = self._group_channels_by_subject_and_trial()
+
+        print(f"[Sampler] # {mode}-Subjects: {len(self.id_to_sr_to_trial_to_channels)}")
+
+        self.patch_size = patch_size
+        self.max_nr_patches = max_nr_patches
+        self.win_shifts = win_shifts
+        self.win_shift_factor = win_shift_factor
+
+        self.num_replicas = (
+            num_replicas if num_replicas is not None else dist.get_world_size()
+        )
+        self.rank = rank if rank is not None else dist.get_rank()
+
+        self.shuffle = shuffle
+        self.seed = seed
+        self.keep_all = keep_all
+
+        self.batch_indices = []
+        self.epoch = 0
+        self.resume_from_epoch = -1
+        self.current_position = 0
+
+        start_time = time.time()
+        print(
+            f"[Sampler] # {mode}-GenerateBatches took: {round(time.time() - start_time,2)}s",
+            file=sys.stderr,
+        )
+
+    def _group_channels_by_subject_and_trial(self):
         id_to_sr_to_trial_to_channels = {}
         for idx, channel_idx in enumerate(self.keys):
             channel_info = self.dataset.channel_index[channel_idx]
@@ -89,31 +119,7 @@ class ByChannelDistributedSampler(DistributedSampler):
                 id_to_sr_to_trial_to_channels[subject_id][sr][trial_idx] = [idx]
             else:
                 id_to_sr_to_trial_to_channels[subject_id][sr][trial_idx].append(idx)
-        self.id_to_sr_to_trial_to_channels = id_to_sr_to_trial_to_channels
-
-        print(f"[Sampler] # {mode}-Subjects: {len(id_to_sr_to_trial_to_channels)}")
-
-        self.patch_size = patch_size
-        self.max_nr_patches = max_nr_patches
-        self.win_shifts = win_shifts
-        self.win_shift_factor = win_shift_factor
-
-        self.num_replicas = (
-            num_replicas if num_replicas is not None else dist.get_world_size()
-        )
-        self.rank = rank if rank is not None else dist.get_rank()
-
-        self.shuffle = shuffle
-        self.seed = seed
-        self.epoch = 0
-        self.keep_all = keep_all
-
-        start_time = time.time()
-        self.generate_batches()
-        print(
-            f"[Sampler] # {mode}-GenerateBatches took: {round(time.time() - start_time,2)}s",
-            file=sys.stderr,
-        )
+        return id_to_sr_to_trial_to_channels
 
     def get_nr_y_patches(self, win_size, sr):
         return int((sr / 2 * win_size + 1) / self.patch_size)
@@ -297,7 +303,8 @@ class ByChannelDistributedSampler(DistributedSampler):
         )
 
     def __iter__(self):
-        if self.shuffle:
+        if self.batch_indices == [] or self.shuffle:
+            self.generate_batches()
             # deterministically shuffle based on epoch and seed
             g = torch.Generator()
             g.manual_seed(self.seed + self.epoch)
@@ -308,9 +315,9 @@ class ByChannelDistributedSampler(DistributedSampler):
         if not self.drop_last:
             # add extra samples to make it evenly divisible by num_replicas
             padding_size = 0
-            while (self.total_size + padding_size) % self.num_replicas != 0:
+            while (len(indices) + padding_size) % self.num_replicas != 0:
                 padding_size += 1
-            final_size = self.total_size + padding_size
+            final_size = len(indices) + padding_size
             if padding_size <= len(indices):
                 indices += indices[:padding_size]
             else:
@@ -319,30 +326,61 @@ class ByChannelDistributedSampler(DistributedSampler):
                 ]
         else:
             # remove tail of data to make it evenly divisible by num_replicas
-            final_size = self.total_size // self.num_replicas * self.num_replicas
+            final_size = int(self.total_size // self.num_replicas * self.num_replicas)
             indices = indices[:final_size]
-        assert len(indices) % self.num_replicas == 0
+        assert (
+            len(indices) % self.num_replicas == 0
+        ), f"len(indices)={len(indices)}, num_replicas={self.num_replicas}"
 
         # subsample
         if not self.keep_all:
             indices = indices[self.rank : final_size : self.num_replicas]
-            assert len(indices) == self.num_samples
+        else:
+            assert (
+                len(indices) == self.num_samples
+            ), f"len(indices)={len(indices)}, num_samples={self.num_samples}"
 
         # This is what changed compared to the DistributedSampler super-class
-        batch_indices = [self.batch_indices[i] for i in indices]
+        self.batch_indices = [self.batch_indices[i] for i in indices]
+
+        # Handles the case of resuming from a checkpoint (which was saved before the epoch was finished)
+        print(
+            f"[Sampler ({self.mode})] epoch={self.epoch}, resume_from_epoch={self.resume_from_epoch}, current_position={self.current_position}"
+        )
+        if self.epoch > self.resume_from_epoch:
+            self.current_position = 0
 
         print(
-            f"[Sampler] # {int(os.getenv('SLURM_PROCID', '0'))}-Batches ({self.mode}): {len(batch_indices)}",
+            f"[Sampler] # {int(os.getenv('SLURM_PROCID', '0'))}-Batches ({self.mode}): {len(self.batch_indices)}",
             file=sys.stderr,
         )
 
-        return iter(batch_indices)
+        return self
+
+    def __next__(self):
+        if self.current_position >= len(self.batch_indices):
+            raise StopIteration
+        batch = self.batch_indices[self.current_position]
+        self.current_position += 1
+        return batch
 
     def __len__(self):
         return self.num_samples
 
     def set_epoch(self, epoch):
         self.epoch = epoch
-        if self.shuffle:
-            # recompute batches
-            self.generate_batches()
+
+    # Need to make the Sampler stateful because one epoch takes longer than the SLURM job limit...
+    def state_dict(self):
+        return {
+            "epoch": self.epoch,
+            "current_position": self.current_position,
+            "batch_indices": self.batch_indices,
+        }
+
+    def load_state_dict(self, state_dict):
+        print(f"[Sampler {self.mode}] Loading state dict")
+        self.epoch = state_dict["epoch"]
+        self.resume_from_epoch = self.epoch
+        self.current_position = state_dict["current_position"]
+        self.batch_indices = state_dict["batch_indices"]

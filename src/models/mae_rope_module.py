@@ -55,6 +55,7 @@ class MAEModuleRoPE(LightningModule):
             # run garbage collection at regular interval instead of logging lr,
             # as it's been moved to on_train_epoch_start()
             gc.collect()
+            torch.cuda.empty_cache()
 
         # Plotting
         if self.trainer.global_step % self.train_log_frq_imgs == 0:
@@ -103,6 +104,26 @@ class MAEModuleRoPE(LightningModule):
         )
 
     # == Checkpoints ====================================================================================================================
+
+    def on_save_checkpoint(self, checkpoint):
+        # Save sampler state
+        checkpoint["train_sampler_state"] = (
+            self.trainer.datamodule.train_sampler.state_dict()
+        )
+        checkpoint["val_sampler_state"] = (
+            self.trainer.datamodule.val_sampler.state_dict()
+        )
+
+    def on_load_checkpoint(self, checkpoint):
+        # Load sampler state
+        if "train_sampler_state" in checkpoint:
+            self.trainer.datamodule.train_sampler.load_state_dict(
+                checkpoint["train_sampler_state"]
+            )
+        if "val_sampler_state" in checkpoint:
+            self.trainer.datamodule.val_sampler.load_state_dict(
+                checkpoint["val_sampler_state"]
+            )
 
     # == Helpers ========================================================================================================================
 
