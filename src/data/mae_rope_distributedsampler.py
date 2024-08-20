@@ -35,7 +35,7 @@ class PresampledDistributedSampler(DistributedSampler):
     def __iter__(self):
         if self.shuffle:
             g = torch.Generator()
-            g.manual_seed(self.seed + self.epoch)
+            g.manual_seed(self.seed + self.epoch if self.shuffle else self.seed)
             indices = torch.randperm(len(self.batch_indices), generator=g).tolist()
         else:
             indices = list(range(len(self.batch_indices)))
@@ -98,11 +98,7 @@ class ByChannelDistributedSampler(DistributedSampler):
         self.resume_from_epoch = -1
         self.current_position = 0
 
-        start_time = time.time()
-        print(
-            f"[Sampler] # {mode}-GenerateBatches took: {round(time.time() - start_time,2)}s",
-            file=sys.stderr,
-        )
+        print(f"[Sampler] Initialized {mode}-sampler!")
 
     def _group_channels_by_subject_and_trial(self):
         id_to_sr_to_trial_to_channels = {}
@@ -165,7 +161,7 @@ class ByChannelDistributedSampler(DistributedSampler):
             sr_to_trial_to_channels,
         ) in tqdm(
             self.id_to_sr_to_trial_to_channels.items(),
-            desc="Generating batches",
+            desc=f"Generating batches ({self.mode})",
             position=0,
             leave=True,
         ):
@@ -179,7 +175,7 @@ class ByChannelDistributedSampler(DistributedSampler):
 
                     # Create a generator for deterministic shuffling
                     g = torch.Generator()
-                    g.manual_seed(self.seed + self.epoch)
+                    g.manual_seed(self.seed + self.epoch if self.shuffle else self.seed)
                     indices = torch.randperm(len(channels), generator=g).tolist()
 
                     # Shuffle the channels list deterministically
@@ -298,16 +294,16 @@ class ByChannelDistributedSampler(DistributedSampler):
         )
 
         print(
-            f"[generate_batches] Finished creating batches. Total size = {self.total_size}, num_samples = {self.num_samples}",
+            f"[generate_batches ({self.mode})] # Batches = {self.total_size}, # Batches (on rank)= {self.num_samples}",
             file=sys.stderr,
         )
 
     def __iter__(self):
-        if self.batch_indices == [] or self.shuffle:
+        if self.shuffle:
             self.generate_batches()
             # deterministically shuffle based on epoch and seed
             g = torch.Generator()
-            g.manual_seed(self.seed + self.epoch)
+            g.manual_seed(self.seed + self.epoch if self.shuffle else self.seed)
             indices = torch.randperm(len(self.batch_indices), generator=g).tolist()
         else:
             indices = list(range(len(self.batch_indices)))
@@ -341,30 +337,19 @@ class ByChannelDistributedSampler(DistributedSampler):
             ), f"len(indices)={len(indices)}, num_samples={self.num_samples}"
 
         # This is what changed compared to the DistributedSampler super-class
-        self.batch_indices = [self.batch_indices[i] for i in indices]
-
-        # Handles the case of resuming from a checkpoint (which was saved before the epoch was finished)
-        print(
-            f"[Sampler ({self.mode})] epoch={self.epoch}, resume_from_epoch={self.resume_from_epoch}, current_position={self.current_position}"
-        )
-        if self.epoch > self.resume_from_epoch:
-            self.current_position = 0
+        batch_indices = [self.batch_indices[i] for i in indices]
 
         print(
-            f"[Sampler] # {int(os.getenv('SLURM_PROCID', '0'))}-Batches ({self.mode}): {len(self.batch_indices)}",
+            f"[Sampler] # {int(os.getenv('SLURM_PROCID', '0'))}-Batches ({self.mode}): {len(batch_indices)}",
             file=sys.stderr,
         )
 
-        return self
-
-    def __next__(self):
-        if self.current_position >= len(self.batch_indices):
-            raise StopIteration
-        batch = self.batch_indices[self.current_position]
-        self.current_position += 1
-        return batch
+        # return self
+        return iter(batch_indices)
 
     def __len__(self):
+        if self.batch_indices == []:
+            self.generate_batches()
         return self.num_samples
 
     def set_epoch(self, epoch):
@@ -372,15 +357,8 @@ class ByChannelDistributedSampler(DistributedSampler):
 
     # Need to make the Sampler stateful because one epoch takes longer than the SLURM job limit...
     def state_dict(self):
-        return {
-            "epoch": self.epoch,
-            "current_position": self.current_position,
-            "batch_indices": self.batch_indices,
-        }
+        return {"epoch": self.epoch}
 
     def load_state_dict(self, state_dict):
-        print(f"[Sampler {self.mode}] Loading state dict")
+        print(f"[Sampler ({self.mode})] Loading from state_dict")
         self.epoch = state_dict["epoch"]
-        self.resume_from_epoch = self.epoch
-        self.current_position = state_dict["current_position"]
-        self.batch_indices = state_dict["batch_indices"]

@@ -62,17 +62,10 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     L.seed_everything(42, workers=True)
 
     # == Instantiate Loggers ==
-
     log.info("Instantiating loggers...")
-    # logger = hydra.utils.instantiate(
-    #     cfg.logger,
-    #     dir=f"{cfg.paths.runs_dir}/{os.getenv('SLURM_JOB_ID')}",
-    #     # group=f"{os.getenv('SLURM_JOB_ID')}",
-    # )
     setup_wandb(cfg)
 
     # == Instantiate Callbacks ==
-
     log.info("Instantiating callbacks...")
     callbacks: List[Callback] = instantiate_callbacks(cfg.get("callbacks"))
 
@@ -91,12 +84,10 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     callbacks.append(lr_monitor)
 
     # == Instantiate DataModule ==
-
     log.info(f"Instantiating datamodule <{cfg.data._target_}>")
     datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
 
     # == Instantiate Model ==
-
     log.info(f"Instantiating model <{cfg.model._target_}>")
     if cfg.restore_from_checkpoint and cfg.restore_from_checkpoint_path:
         checkpoint_path = cfg.restore_from_checkpoint_path
@@ -140,7 +131,6 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         num_nodes=int(os.getenv("SLURM_JOB_NUM_NODES")),
         devices=(len(os.getenv("CUDA_VISIBLE_DEVICES").split(","))),
         callbacks=callbacks,
-        # logger=logger,  # Uncomment if logger is configured
     )
 
     object_dict = {
@@ -155,6 +145,11 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
 
     if cfg.get("train"):
         log.info("Starting training!")
+        # trainer.validate(
+        #     model=model,
+        #     datamodule=datamodule,
+        #     ckpt_path=ckpt_path if cfg.restore_from_checkpoint else None,
+        # )
         trainer.fit(
             model=model,
             datamodule=datamodule,

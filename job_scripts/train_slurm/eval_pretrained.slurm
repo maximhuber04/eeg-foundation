@@ -1,13 +1,19 @@
 #!/bin/bash
-#SBATCH --mail-type=ALL         # mail configuration: NONE, BEGIN, END, FAIL, REQUEUE, ALL
-#SBATCH --output=/home/maxihuber/eeg-foundation/runs/sbatch/train_%j.out
-#SBATCH --error=/home/maxihuber/eeg-foundation/runs/sbatch/train_%j.err
+
+#SBATCH --mail-type=BEGIN,END,FAIL,REQUEUE
+#SBATCH --output=/itet-stor/maxihuber/net_scratch/runs/ft/%j/train_%j_%t.out
+#SBATCH --error=/itet-stor/maxihuber/net_scratch/runs/ft/%j/train_%j_%t.err
+#SBATCH --open-mode=append
+#SBATCH --job-name=tuab
 #SBATCH --nodes=1
 #SBATCH --gres=gpu:1
-#SBATCH --open-mode=append
+#SBATCH --cpus-per-task=3
 #SBATCH --mem=300G
-#SBATCH --job-name=ft
-#SBATCH --nodelist=tikgpu10
+#SBATCH --nodelist=tikgpu08,tikgpu10
+
+# Create directories for job
+mkdir -p /itet-stor/maxihuber/net_scratch/runs/$SLURM_JOB_ID
+mkdir -p /itet-stor/maxihuber/net_scratch/runs/$SLURM_JOB_ID/metrics
 
 # Exit on errors
 set -o errexit
@@ -27,11 +33,12 @@ for node in $(scontrol show hostname $SLURM_JOB_NODELIST); do
     echo "In directory:    $(pwd)"
     echo "Starting on:     $(date)"
     echo "SLURM_JOB_ID:    ${SLURM_JOB_ID}"
+    echo "CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES}"
+    echo "NUM_NODES: ${SLURM_JOB_NUM_NODES}"
 done
 
-# Binary or script to execute
-# make visualize
-srun python /home/maxihuber/eeg-foundation/src/keepgpu.py
+# Make sure wandb recognizes us
+srun python /home/maxihuber/eeg-foundation/src/finetune/v2/network_finetune.py
 
 # Send more noteworthy information to the output log
 echo "Finished at:     $(date)"

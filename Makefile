@@ -27,7 +27,10 @@ test-full: ## Run all tests
 	pytest
 
 train: ## Train the model (on local/calling node)
-	python src/train.py experiment=rope.yaml
+	python src/train2.py experiment=rope.yaml
+
+val:
+	python src/val.py experiment=rope.yaml
 
 fulltrain:
 	sbatch /home/maxihuber/eeg-foundation/job_scripts/train_slurm/combined_script.slurm
@@ -75,10 +78,10 @@ du:
 	du -sh /scratch/mae
 
 cpu:
-	srun --time 700 --gres=gpu:0 --mem=10G --nodelist=tikgpu10 --pty bash -i
+	srun --time 700 --gres=gpu:0 --mem=10G --pty bash -i
 
 cpu8:
-	srun --time 700 --gres=gpu:0 --mem=50G --nodelist=tikgpu08 --pty bash -i
+	srun --time 700 --gres=gpu:0 --mem=80G --nodelist=tikgpu08 --pty bash -i
 
 gpu:
 	srun --time 700 --gres=gpu:1 --mem=100G --nodelist=tikgpu10 --pty bash -i
@@ -96,7 +99,7 @@ gpu8:
 	srun --time 700 --gres=gpu:1 --mem=100G --nodelist=tikgpu08 --pty bash -i
 
 gpu10:
-	srun --time 700 --gres=gpu:1 --mem=100G --nodelist=tikgpu10 --pty bash -i
+	srun --time 700 --gres=gpu:1 --mem=80G --nodelist=tikgpu10 --pty bash -i
 
 jupyter:
 	jupyter notebook --no-browser --port 5950 --ip $$(hostname -f)

@@ -6,10 +6,10 @@
 #SBATCH --open-mode=append
 #SBATCH --job-name=train
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:6
-#SBATCH --ntasks-per-node=6
+#SBATCH --gres=gpu:5
+#SBATCH --ntasks-per-node=5
 #SBATCH --cpus-per-task=10
-#SBATCH --mem=1350G
+#SBATCH --mem=1250G
 #SBATCH --nodelist=tikgpu10
 
 # More options, requeue hasn't worked so far however (i do it manually)
@@ -51,7 +51,8 @@ done
 
 # Make sure wandb recognizes us
 wandb login
-srun python /home/maxihuber/eeg-foundation/src/train.py experiment=rope.yaml
+srun python /home/maxihuber/eeg-foundation/src/train2.py experiment=rope.yaml
+# srun python /home/maxihuber/eeg-foundation/src/val.py experiment=rope.yaml
 
 # Start training with or without checkpoint
 # ROUTINE_CHECKPOINT_DIR="/itet-stor/maxihuber/net_scratch/checkpoints/${SLURM_JOB_ID}/routine"

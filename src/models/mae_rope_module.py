@@ -87,7 +87,7 @@ class MAEModuleRoPE(LightningModule):
 
         # Plotting
         if custom_step % self.val_log_frq_imgs == 0:
-            self.plot_spgs(batch, log_tag="val")
+            self.plot_spgs(batch, log_tag="val", batch_idx=batch_idx)
 
         return val_loss
 
@@ -118,11 +118,11 @@ class MAEModuleRoPE(LightningModule):
         # Load sampler state
         if "train_sampler_state" in checkpoint:
             self.trainer.datamodule.train_sampler.load_state_dict(
-                checkpoint["train_sampler_state"]
+                state_dict=checkpoint["train_sampler_state"],
             )
         if "val_sampler_state" in checkpoint:
             self.trainer.datamodule.val_sampler.load_state_dict(
-                checkpoint["val_sampler_state"]
+                state_dict=checkpoint["val_sampler_state"],
             )
 
     # == Helpers ========================================================================================================================
@@ -148,7 +148,7 @@ class MAEModuleRoPE(LightningModule):
             },
         }
 
-    def plot_spg_and_log(self, spg, title, shift):
+    def plot_spg_and_log(self, spg, title, shift, batch_idx=0):
         sr = int(2 * (spg.shape[0]) / shift)
         dur = int((spg.shape[1]) * shift * 0.25)
         plt.pcolormesh(spg, shading="auto", cmap="RdBu")
@@ -158,12 +158,12 @@ class MAEModuleRoPE(LightningModule):
         plt.colorbar(label="")
         wandb.log(
             {title: [wandb.Image(plt)]},
-            step=self.trainer.global_step,
+            step=self.trainer.global_step + batch_idx,
         )
         plt.clf()
         plt.close()
 
-    def plot_spgs(self, batch, log_tag):
+    def plot_spgs(self, batch, log_tag, batch_idx=0):
 
         with torch.no_grad():
 
@@ -176,6 +176,7 @@ class MAEModuleRoPE(LightningModule):
                 spg=sample_input_image,
                 title=f"{log_tag}_input",
                 shift=batch["win_size"],
+                batch_idx=batch_idx,
             )
 
             # == Masked Input Image ==
@@ -196,6 +197,7 @@ class MAEModuleRoPE(LightningModule):
                 spg=masked_sample_input_image,
                 title=f"{log_tag}_masked_input",
                 shift=batch["win_size"],
+                batch_idx=batch_idx,
             )
 
             # == Predicted Output Image ==
@@ -207,4 +209,5 @@ class MAEModuleRoPE(LightningModule):
                 spg=sample_output_image,
                 title=f"{log_tag}_predicted",
                 shift=batch["win_size"],
+                batch_idx=batch_idx,
             )

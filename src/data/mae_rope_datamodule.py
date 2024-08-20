@@ -99,6 +99,9 @@ class TrainDataModule(LightningDataModule):
         self.win_shift_factor = win_shift_factor
         self.none_channel_probability = none_channel_probability
 
+        self._train_dataloader = None
+        self._val_dataloader = None
+
         self.save_hyperparameters(logger=False)
 
     # == Setup ==========================================================================================================================
@@ -133,6 +136,9 @@ class TrainDataModule(LightningDataModule):
                         trial_info_index[num_trials] = trial_info
                         num_trials += 1
             print(f"[setup] # Trials = {num_trials}", file=sys.stderr)
+
+        # print(f"[setup] Shorten trial_info_index", file=sys.stderr)
+        # trial_info_index = {k: v for k, v in trial_info_index.items() if k < 500}
 
         # TODO: quick fix, only cause it's accessed in the collate_fn
         # this definition actually belongs within the next "if self.load_data" branch
@@ -314,8 +320,17 @@ class TrainDataModule(LightningDataModule):
             train_channel_index = {key: full_channel_index[key] for key in train_keys}
             val_channel_index = {key: full_channel_index[key] for key in val_keys}
 
+            print(
+                f"# Train channels: {len(train_channel_index)}, # Test channels {len(val_channel_index)}",
+                file=sys.stderr,
+            )
+
             self.train_dataset = LocalStorageDataset(train_channel_index)
             self.val_dataset = LocalStorageDataset(val_channel_index)
+            print(
+                f"[setup] # Train/Test Batches: {len(train_channel_index)}, {len(val_channel_index)}",
+                file=sys.stderr,
+            )
 
             self.train_sampler = ByChannelDistributedSampler(
                 mode="train",
@@ -709,25 +724,82 @@ class TrainDataModule(LightningDataModule):
 
     # == Data Loaders ===================================================================================================================
 
+    class StatefulDataLoader(DataLoader):
+        """
+        Implements a stateful DataLoader. Allows resuming from a specific batch index.
+        """
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.batch_idx = 0
+
+        def __iter__(self):
+            self.iterator = super().__iter__()
+            for _ in range(self.batch_idx):
+                next(self.iterator)
+            return self
+
+        def __next__(self):
+            self.batch_idx += 1
+            return next(self.iterator)
+
+        def __len__(self):
+            print(
+                f"[DataLoader] Length: {len(self.batch_sampler)}",
+                file=sys.stderr,
+            )
+            return len(self.batch_sampler)
+
+        def state_dict(self):
+            return {"batch_idx": self.batch_idx}
+
+        def load_state_dict(self, state_dict):
+            self.batch_idx = state_dict["batch_idx"]
+
     def train_dataloader(self):
-        return DataLoader(
-            self.train_dataset,
-            batch_sampler=self.train_sampler,
-            collate_fn=self.snake_collate_fn,
-            num_workers=self.num_workers,
-            pin_memory=self.pin_memory,
-            prefetch_factor=self.prefetch_factor,
-        )
+        if self._train_dataloader is None:
+            self._train_dataloader = self.StatefulDataLoader(
+                self.train_dataset,
+                batch_sampler=self.train_sampler,
+                collate_fn=self.snake_collate_fn,
+                num_workers=self.num_workers,
+                pin_memory=self.pin_memory,
+                prefetch_factor=self.prefetch_factor,
+            )
+        return self._train_dataloader
 
     def val_dataloader(self):
-        return DataLoader(
-            self.val_dataset,
-            batch_sampler=self.val_sampler,
-            collate_fn=self.snake_collate_fn,
-            num_workers=self.num_workers,
-            pin_memory=self.pin_memory,
-            prefetch_factor=self.prefetch_factor,
-        )
+        if self._val_dataloader is None:
+            self._val_dataloader = self.StatefulDataLoader(
+                self.val_dataset,
+                batch_sampler=self.val_sampler,
+                collate_fn=self.snake_collate_fn,
+                num_workers=self.num_workers,
+                pin_memory=self.pin_memory,
+                prefetch_factor=self.prefetch_factor,
+            )
+        return self._val_dataloader
+
+    # == Checkpoint =====================================================================================================================
+
+    def on_save_checkpoint(self, checkpoint):
+        if self._train_dataloader:
+            checkpoint["train_dataloader_state"] = self._train_dataloader.state_dict()
+
+    def on_load_checkpoint(self, checkpoint):
+        if "train_dataloader_state" in checkpoint:
+            self.train_dataloader().load_state_dict(
+                checkpoint["train_dataloader_state"]
+            )
+        # NOTE: temporary solution to resume from 142000 checkpoint
+        if (
+            "train_sampler_state" in checkpoint
+            and "current_position" in checkpoint["train_sampler_state"]
+        ):
+            state_dict = {
+                "batch_idx": checkpoint["train_sampler_state"]["current_position"]
+            }
+            self.train_dataloader().load_state_dict(state_dict)
 
     # == Helpers ========================================================================================================================
 
